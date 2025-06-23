@@ -8,7 +8,6 @@
 #Import QT libraries
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtWidgets import QMainWindow
-from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtGui import QDoubleValidator, QPixmap
 
 #Import basic libraries
@@ -302,18 +301,16 @@ class UI_Setup(QMainWindow):
 
     #This slot triggers when settings are committed. 
     #Writes all settings to instruments, pulling from settings dictionary if an empty string is detected in the corresponding text field.
-    @pyqtSlot()
     def commit_btn_clicked(self):
         self.Running = 'Initialization'
         timer_2.setInterval(5 * 1000)
 
         #Writing voltage to power supply
         v = self.V_Write.text()
-        if v == "" and self.Running == 'Initialization':
+        if v == "" and self.V_Write.placeholderText() == "0.00 V":
             pass
         elif v == "":
             instr.write('VSET' + str(self.settings['Voltage']))
-            self.V_Write.setPlaceholderText(str(self.settings['Voltage']) + ' V')
         else:
             try:
                 v_f = float(v)
@@ -326,11 +323,10 @@ class UI_Setup(QMainWindow):
 
         #Writing current to power supply
         s = self.I_Write.text()
-        if s == "" and self.Running == 'Initialization':
+        if s == "" and self.I_Write.placeholderText() == "0.00 mA":
             pass
         elif s == "":
             instr.write('ISET' + str(self.settings['Current']) + ' MA')
-            self.I_Write.setPlaceholderText(str(self.settings['Current]']) + ' mA')
         else:
             try:
                 s_f = float(s)
@@ -343,13 +339,12 @@ class UI_Setup(QMainWindow):
 
         #Writing flow rate to pump
         f = self.Flow_Write.text()
-        if f == "" and self.Running == 'Initialization':
+        if f == "" and self.Flow_Write.placeholderText() == "0.00 mL/min":
             pass
         elif f == "":
             ne_pump.set_rate(self.settings['Flow'])
             ne_pump.beep()
             ne_pump.start()
-            self.Flow_Write.setPlaceholderText(str(self.settings['Flow']) + ' mL/min')
             self.flow_val.setText(str(self.settings['Flow']))
         else:
             try:
@@ -368,11 +363,10 @@ class UI_Setup(QMainWindow):
 
         #Writing temperature set point to PID
         t = self.Temp_Set.text()
-        if t == "" and self.Running == 'Initialization':
+        if t == "" and self.Temp_Set.placeholderText() == "0.00 °C":
             pass
         elif t == "":
             controller.set_sp_loop1(self.settings['Temp'])
-            self.Temp_Set.setPlaceholderText(str(self.settings['Temp']) + ' °C')
         else:
             try:
                 t_f = float(t)
@@ -381,6 +375,7 @@ class UI_Setup(QMainWindow):
                 self.Temp_Set.setPlaceholderText(str(self.settings['Temp']) + ' °C')
             except ValueError:
                 print('Invalid Entry')
+        self.Temp_Set.clear()
 
         if self.term_btn.isEnabled():
             pass
@@ -393,7 +388,6 @@ class UI_Setup(QMainWindow):
 
     #This slot triggers when the termination button is clicked.
     #All instruments are set to 0, the logging timer returns to standby, and the commit button is enabled again.
-    @pyqtSlot()
     def term_btn_clicked(self):
         self.Running = 0
         timer_2.setInterval(300 * 1000)
@@ -402,6 +396,7 @@ class UI_Setup(QMainWindow):
         ne_pump.set_rate(0)
         controller.set_sp_loop1(0)
 
+        self.Running = 'Standby'
         self.term_btn.setEnabled(False)
         self.commit_btn.setEnabled(True)
 
@@ -474,7 +469,7 @@ if __name__ == "__main__":
     log.to_csv('elec_data.csv', mode='x', index=False, header=True)
 
     timer_2 = QtCore.QTimer()
-    timer_2.timeout.connect(lambda: datalog(window.V_Read.text(), window.I_Read.text(), window.Power.text(), window.resist_val.text(), window.settings['Flow'], window.Temp_Read.text(), log))
+    timer_2.timeout.connect(lambda: datalog(window.V_Read.text(), window.I_Read.text(), window.Power.text(), window.resist_val.text(), window.settings['Flow'], window.settings['Temp'], log))
     timer_2.start(300 * 1000)
 
     sys.exit(app.exec())
