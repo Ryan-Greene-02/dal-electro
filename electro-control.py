@@ -354,6 +354,7 @@ class UI_Setup(QMainWindow):
                     pass
                 else:
                     ne_pump.start()
+                    ne_pump.beep()
                 self.Flow_Write.setPlaceholderText(self.Flow_Write.text() + " mL/min")
                 self.flow_val.setText(self.Flow_Write.text())
                 self.settings['Flow'] = int(self.Flow_Write.text())
@@ -461,6 +462,7 @@ if __name__ == "__main__":
     timer_1.timeout.connect(lambda: read_devices(devices, instr))
     timer_1.start(500)
 
+    #Set the file name to be saved by the system. Must be changed or previous file will be overwritten if it is in the directory.
     try:
         os.remove('elec_data.csv')
     except OSError:
@@ -469,7 +471,7 @@ if __name__ == "__main__":
     log.to_csv('elec_data.csv', mode='x', index=False, header=True)
 
     timer_2 = QtCore.QTimer()
-    timer_2.timeout.connect(lambda: datalog(window.V_Read.text(), window.I_Read.text(), window.Power.text(), window.resist_val.text(), window.settings['Flow'], window.settings['Temp'], log))
+    timer_2.timeout.connect(lambda: datalog(window.V_Read.text(), window.I_Read.text(), window.Power_Calc.text(), window.resist_val.text(), window.settings['Flow'], window.settings['Temp'], log))
     timer_2.start(300 * 1000)
 
     sys.exit(app.exec())
