@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import QMainWindow
 from PyQt6.QtGui import QDoubleValidator, QPixmap
 
 #Import basic libraries
-from control import pump, utils
 from decimal import Decimal
 from pid_control import heater
 import nidaqmx
@@ -22,6 +21,12 @@ import sys
 import os
 import pandas as pd
 from minimalmodbus import NoResponseError
+
+device_list = {
+    "Pump Digital": "Dev1/port0/line15",
+    "Pump Analog": "cDAQ1Mod1/ao3",
+    "Water Meter": "Dev1/ai6"
+}
 
 #Globally define power supply and pump serial address
 rm = pyvisa.ResourceManager()
@@ -35,23 +40,23 @@ devices = {
     "Water Resist": "Dev1/ai6"
 }
 
-#Non-edited pump settings
-diameter_numerator = 3
-diameter_denominator = 16
-try:
-    ne_pump = pump.PeristalticPump(pump_port)
-    ne_pump.set_diameter(diameter_numerator, diameter_denominator)
-    ne_pump.set_volume(0)
-    ne_pump.set_direction('withdraw')
-except utils.NewEraPumpCommError:
-    sys.exit("Error: Pump disconnected or on incorrect port.")
-
 #PID heat control connection check
 controller = heater.OmegaPID('COM7', 247)
 try:
     controller.status_check()
 except NoResponseError:
     sys.exit("Error: Heat controller disconnected or on incorrect port.")
+
+#Tasks for controlling the pump
+def pump_start_stop():
+    pump_start_task = nidaqmx.Task(new_task_name="Pump Start")
+    pump_start_task.do_channels.add_do_chan(device_list["Pump Digital"])
+    return pump_start_task
+
+def pump_flow():
+    pump_flow_task = nidaqmx.Task(new_task_name="Flow Set")
+    pump_flow_task.ao_channels.add_ao_voltage_chan(device_list["Pump Analog"], min_val=0.0, max_val=10.0)
+    return pump_flow_task
 
 #Defining the main UI window
 class UI_Setup(QMainWindow):
@@ -342,19 +347,17 @@ class UI_Setup(QMainWindow):
         if f == "" and self.Flow_Write.placeholderText() == "0.00 mL/min":
             pass
         elif f == "":
-            ne_pump.set_rate(self.settings['Flow'])
-            ne_pump.beep()
-            ne_pump.start()
+            set_rate.write(self.settings['Flow'] / 60)
+            pump_on.write(False)
             self.flow_val.setText(str(self.settings['Flow']))
         else:
             try:
                 f_f = float(f)
-                ne_pump.set_rate(f_f)
+                set_rate.write(f_f / 60)
                 if f_f == 0:
                     pass
                 else:
-                    ne_pump.start()
-                    ne_pump.beep()
+                    pump_on.write(False)
                 self.Flow_Write.setPlaceholderText(self.Flow_Write.text() + " mL/min")
                 self.flow_val.setText(self.Flow_Write.text())
                 self.settings['Flow'] = int(self.Flow_Write.text())
@@ -394,7 +397,8 @@ class UI_Setup(QMainWindow):
         timer_2.setInterval(300 * 1000)
         instr.write('VSET 0')
         instr.write('ISET 0')
-        ne_pump.set_rate(0)
+        set_rate.write(0)
+        pump_on.write(True)
         controller.set_sp_loop1(0)
 
         self.Running = 'Standby'
@@ -403,7 +407,8 @@ class UI_Setup(QMainWindow):
 
     #This slot triggers when the flow stop button is pressed. Immediately stops pump flow.
     def stop_flow(self):
-        ne_pump.stop()
+        set_rate.write(0)
+        pump_on.write(True)
     
     #def system_check(self):
         #check if levels are good before initializing system
@@ -414,12 +419,15 @@ class UI_Setup(QMainWindow):
         timer_2.stop()
         instr.write('VSET 0')
         instr.write('ISET 0')
-        ne_pump.set_rate(0)
+        set_rate.write(0)
+        pump_on.write(True)
+        set_rate.stop()
+        pump_on.stop()
         controller.set_sp_loop1(0)
 
-def read_devices(devices, instr):
-    with nidaqmx.Task() as task:
-        task.ai_channels.add_ai_voltage_chan("Dev1/ai6", max_val=10.0, min_val=0.0)
+def read_devices(device_list, instr):
+    with nidaqmx.Task(new_task_name="Resistivity") as task:
+        task.ai_channels.add_ai_voltage_chan(device_list["Water Meter"], max_val=10.0, min_val=0.0)
         data_r = Decimal(value=(float(task.read()) * 2)).quantize(Decimal("0.00"))
         window.resist_val.setText(str(data_r))
 
@@ -434,7 +442,7 @@ def read_devices(devices, instr):
     value_t = controller.get_pv_loop1()
     window.temp_val_1.setText(str(value_t))
 
-    window.Power_Calc.setText(str(float(data_v) * float(data_a)))
+    window.Power_Calc.setText(str(round((float(data_v) * float(data_a)), ndigits=4)))
 
 def datalog(V_Text, I_Text, P_Text, R_Text, Flow_Text, T_Text, df=pd.DataFrame()):
     df_export = df
@@ -454,12 +462,17 @@ if __name__ == "__main__":
         print("No power supply detected.")
         sys.exit()
  
+    pump_on = pump_start_stop()
+    set_rate = pump_flow()
+    pump_on.start()
+    set_rate.start()
+    
     app = QtWidgets.QApplication(sys.argv)
     window = UI_Setup()
     window.show()
 
     timer_1 = QtCore.QTimer()
-    timer_1.timeout.connect(lambda: read_devices(devices, instr))
+    timer_1.timeout.connect(lambda: read_devices(device_list, instr))
     timer_1.start(500)
 
     #Set the file name to be saved by the system. Must be changed or previous file will be overwritten if it is in the directory.
