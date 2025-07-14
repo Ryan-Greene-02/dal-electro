@@ -20,6 +20,7 @@ import re
 import sys
 import os
 import pandas as pd
+import serial
 from minimalmodbus import NoResponseError
 
 device_list = {
@@ -46,6 +47,10 @@ try:
     controller.status_check()
 except NoResponseError:
     sys.exit("Error: Heat controller disconnected or on incorrect port.")
+cell = heater.DeltaPID('COM6', 1)
+if cell.serial is None:
+    raise ValueError("Instrument.serial is none")
+cell.serial.baudrate = 19200
 
 #Tasks for controlling the pump
 def pump_start_stop():
@@ -376,6 +381,7 @@ class UI_Setup(QMainWindow):
                 t_f = float(t)
                 self.settings['Temp'] = t_f
                 controller.set_sp_loop1(self.settings['Temp'])
+                cell.set_sp(int(self.settings['Temp']) * 10)
                 self.Temp_Set.setPlaceholderText(str(self.settings['Temp']) + ' °C')
             except ValueError:
                 print('Invalid Entry')

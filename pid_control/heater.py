@@ -22,3 +22,18 @@ class OmegaPID(minimalmodbus.Instrument):
     def set_sp_loop1(self, value):
         self.write_register(1200, value, 1)
         return self.read_register(1200, 1)
+    
+class DeltaPID(minimalmodbus.Instrument):
+    def __init__(self, portname, slaveaddress):
+        minimalmodbus.Instrument.__init__(self, portname, slaveaddress)
+
+    def status_check(self):
+        self.read_register(0x1004, 1)
+        return print("Cell heat control connected")
+
+    def get_pv(self):
+        return self.read_register(0x1000, 1)
+    
+    def set_sp(self, value):
+        self.write_register(0x1001, value)
+        return self.read_register(0x1001, 1)
