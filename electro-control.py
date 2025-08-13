@@ -162,6 +162,9 @@ class UI_Setup(QMainWindow):
         self.term_btn.setEnabled(False)
         self.term_btn.clicked.connect(self.term_btn_clicked)
 
+        self.program_btn = QtWidgets.QPushButton("Open Program File")
+        self.program_btn.clicked.connect(self.load_program)
+
         #Tabs containing settings
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self.elec_UI(), "Power Control")
@@ -415,6 +418,10 @@ class UI_Setup(QMainWindow):
     def stop_flow(self):
         set_rate.write(0)
         pump_on.write(True)
+
+    #This slot loads a program from a CSV file for use in running the system.
+    def load_program(self):
+        
     
     #def system_check(self):
         #check if levels are good before initializing system
