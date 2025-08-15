@@ -9,6 +9,7 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtWidgets import QMainWindow
 from PyQt6.QtGui import QDoubleValidator, QPixmap
+from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal, QRunnable, pyqtSlot
 
 #Import basic libraries
 from decimal import Decimal
@@ -22,6 +23,7 @@ import os
 import pandas as pd
 import serial
 from minimalmodbus import NoResponseError
+from uuid import uuid4, UUID
 
 device_list = {
     "Pump Digital": "Dev1/port0/line15",
@@ -63,6 +65,29 @@ def pump_flow():
     pump_flow_task.ao_channels.add_ao_voltage_chan(device_list["Pump Analog"], min_val=0.0, max_val=10.0)
     return pump_flow_task
 
+class WorkerSignals(QObject):
+
+    signal_started = pyqtSignal(list)
+    signal_finished = pyqtSignal(UUID)
+    signal_progress = pyqtSignal(int)
+
+class WorkerThread(QRunnable):
+
+    finished = pyqtSignal()
+
+    def __init__(self, worker_id: UUID, files: list[str]):
+        super().__init__()
+        self.worker_id = worker_id
+        self.files_to_process = files
+        self.signals: WorkerSignals = WorkerSignals()
+        self.keep_running = True
+
+    def run(self):
+        self.signals.signal_started.emit(self.files_to_process)
+        
+
+
+
 #Defining the main UI window
 class UI_Setup(QMainWindow):
 
@@ -74,6 +99,13 @@ class UI_Setup(QMainWindow):
         self.base.setObjectName("baseWidget")
         self.setCentralWidget(self.base)
         self.move(100, 100)
+
+        #Threading
+        self.workers = dict[UUID, WorkerThread] = {}
+        self.threadpool = QThreadPool()
+
+        self.files_to_process = []
+
         #Construct base layout for window
         layout = QtWidgets.QVBoxLayout()
         self.base.setLayout(layout)
@@ -158,12 +190,15 @@ class UI_Setup(QMainWindow):
         self.commit_btn = QtWidgets.QPushButton("Commit Settings")
         self.commit_btn.clicked.connect(self.commit_btn_clicked)
 
-        self.term_btn = QtWidgets.QPushButton("Terminate Program")
-        self.term_btn.setEnabled(False)
-        self.term_btn.clicked.connect(self.term_btn_clicked)
-
         self.program_btn = QtWidgets.QPushButton("Open Program File")
         self.program_btn.clicked.connect(self.load_program)
+
+        self.run_btn = QtWidgets.QPushButton("Run System")
+        self.run_btn.clicked.connect(self.start_worker)
+
+        self.term_btn = QtWidgets.QPushButton("Terminate Operation")
+        self.term_btn.setEnabled(False)
+        self.term_btn.clicked.connect(self.term_btn_clicked)
 
         #Tabs containing settings
         self.tabs = QtWidgets.QTabWidget()
@@ -315,6 +350,10 @@ class UI_Setup(QMainWindow):
     #This slot triggers when settings are committed. 
     #Writes all settings to instruments, pulling from settings dictionary if an empty string is detected in the corresponding text field.
     def commit_btn_clicked(self):
+        if self.program_btn.isEnabled():
+            self.program_btn.setDisabled()
+            self.run_btn.setDisabled()
+
         self.Running = 'Initialization'
         timer_2.setInterval(5 * 1000)
 
@@ -421,8 +460,30 @@ class UI_Setup(QMainWindow):
 
     #This slot loads a program from a CSV file for use in running the system.
     def load_program(self):
+        if self.commit_btn.isEnabled():
+            self.commit_btn.setDisabled()
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open Program",
+            "{$HOME}",
+            "*.csv"
+        )
+        if len(filename) < 0:
+            return
+        self.signal.send_files_to_main.emit(filename)
         
-    
+    def start_worker(self):
+        worker_id = uuid4
+        worker = WorkerThread(worker_id=worker_id, files = self.files_to_process)
+
+        worker.signals.signal_started.connect(self.handle_started)
+        worker.signals.signal_progress.connect(self.handle_progress)
+        worker.signals.signal_finished.connect(self.handle_finished)
+
+        self.workers[worker_id] = worker
+
+        self.threadpool.start(worker)
+
     #def system_check(self):
         #check if levels are good before initializing system
 
@@ -437,6 +498,25 @@ class UI_Setup(QMainWindow):
         set_rate.stop()
         pump_on.stop()
         controller.set_sp_loop1(0)
+
+    @pyqtSlot(list)
+    def handle_files_from_widget(self, files: list[str]):
+        self.files_to_process = files
+        self.run_btn.setDisabled(len(self.files_to_process) == 0)
+
+    @pyqtSlot(int)
+    def handle_progress(self, n):
+        print(f"Progress: {n}%")
+
+    @pyqtSlot(UUID)
+    def handle_finished(self, worker_id):
+        print(f"Worker {worker_id} finished")
+        self.workers.pop(worker_id)
+        assert worker_id not in self.workers
+
+    @pyqtSlot(list)
+    def handle_started(self, files: list[str]):
+        print(f"Started processing files: {files}")
 
 def read_devices(device_list, instr):
     with nidaqmx.Task(new_task_name="Resistivity") as task:
