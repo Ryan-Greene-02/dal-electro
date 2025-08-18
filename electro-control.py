@@ -16,6 +16,7 @@ from decimal import Decimal
 from pid_control import heater
 import nidaqmx
 import time
+import csv
 import pyvisa
 import re
 import sys
@@ -69,11 +70,9 @@ class WorkerSignals(QObject):
 
     signal_started = pyqtSignal(list)
     signal_finished = pyqtSignal(UUID)
-    signal_progress = pyqtSignal(int)
+    settings_update = pyqtSignal(list)
 
 class WorkerThread(QRunnable):
-
-    finished = pyqtSignal()
 
     def __init__(self, worker_id: UUID, files: list[str]):
         super().__init__()
@@ -84,9 +83,11 @@ class WorkerThread(QRunnable):
 
     def run(self):
         self.signals.signal_started.emit(self.files_to_process)
-        
-
-
+        with open(self.files_to_process[0], newline='') as csvfile:
+            self.reader = csv.reader(csvfile)
+            for row in self.reader:
+                self.signals.settings_update.emit(row)
+                time.sleep(row[0])
 
 #Defining the main UI window
 class UI_Setup(QMainWindow):
@@ -99,6 +100,7 @@ class UI_Setup(QMainWindow):
         self.base.setObjectName("baseWidget")
         self.setCentralWidget(self.base)
         self.move(100, 100)
+        self.child_window = FileWindow(self)
 
         #Threading
         self.workers = dict[UUID, WorkerThread] = {}
@@ -452,32 +454,21 @@ class UI_Setup(QMainWindow):
         self.Running = 'Standby'
         self.term_btn.setEnabled(False)
         self.commit_btn.setEnabled(True)
+        self.program_btn.setEnabled(True)
+        self.run_btn.setEnabled(True)
 
     #This slot triggers when the flow stop button is pressed. Immediately stops pump flow.
     def stop_flow(self):
         set_rate.write(0)
         pump_on.write(True)
-
-    #This slot loads a program from a CSV file for use in running the system.
-    def load_program(self):
-        if self.commit_btn.isEnabled():
-            self.commit_btn.setDisabled()
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Open Program",
-            "{$HOME}",
-            "*.csv"
-        )
-        if len(filename) < 0:
-            return
-        self.signal.send_files_to_main.emit(filename)
         
     def start_worker(self):
+        self.commit_btn.setDisabled(True)
         worker_id = uuid4
         worker = WorkerThread(worker_id=worker_id, files = self.files_to_process)
 
         worker.signals.signal_started.connect(self.handle_started)
-        worker.signals.signal_progress.connect(self.handle_progress)
+        worker.signals.settings_update.connect(self.handle_update)
         worker.signals.signal_finished.connect(self.handle_finished)
 
         self.workers[worker_id] = worker
@@ -505,8 +496,13 @@ class UI_Setup(QMainWindow):
         self.run_btn.setDisabled(len(self.files_to_process) == 0)
 
     @pyqtSlot(int)
-    def handle_progress(self, n):
-        print(f"Progress: {n}%")
+    def handle_update(self, commands: list[str]):
+        instr.write('VSET ' + commands[1])
+        instr.write('ISET ' + commands[2] + ' MA')
+        set_rate.write(int(commands[2]) / 60)
+        if commands[2] == 0:
+            pump_on.write(0)
+        controller.set_sp_loop1(float(commands[3]))
 
     @pyqtSlot(UUID)
     def handle_finished(self, worker_id):
@@ -517,6 +513,30 @@ class UI_Setup(QMainWindow):
     @pyqtSlot(list)
     def handle_started(self, files: list[str]):
         print(f"Started processing files: {files}")
+
+class FileWindow(QMainWindow):
+
+    signal_send_files_to_main = pyqtSignal(list)
+
+    def __init__(self, parent: UI_Setup) -> None:
+        super().__init__(parent=parent)
+        self.signal_send_files_to_main.connect(parent.handle_files_from_widget)
+
+        self.main_widget = QtWidgets.QWidget()
+        self.setCentralWidget(self.main_widget)
+        self.main_layout = QtWidgets.QVBoxLayout()
+        self.main_widget.setLayout(self.main_layout)
+
+        self.summon_file_btn = QtWidgets.QPushButton("Open File Select")
+        self.summon_file_btn.clicked.connect(self.open_file_dialog)
+        self.main_layout.addWidget(self.summon_file_btn)
+
+    def open_file_dialog(self):
+        files, _ = QtWidgets.QFileDialog().getOpenFileName(self, "Open File", "", "CSV files (*.csv)")
+        if len(files) > 0:
+            return
+        
+        self.signal_send_files_to_main.emit(files)
 
 def read_devices(device_list, instr):
     with nidaqmx.Task(new_task_name="Resistivity") as task:
